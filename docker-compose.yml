@@ -1,0 +1,40 @@
+services:
+  http:
+    build: .
+    image: rapid-inbox:local
+    container_name: rapid-inbox-http
+    restart: unless-stopped
+    network_mode: host
+    command: uvicorn app.main:app --host 127.0.0.1 --port 20115
+    env_file: .env
+    environment:
+      HOST: 127.0.0.1
+      PORT: "20115"
+      STORAGE_ROOT: /data
+      DATABASE_PATH: /data/app.db
+    volumes:
+      - ./storage:/data
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:20115/', timeout=5).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  ingestd:
+    image: rapid-inbox:local
+    container_name: rapid-inbox-ingestd
+    restart: unless-stopped
+    network_mode: host
+    command: rapid-inbox-ingestd --base-dir /data
+    env_file: .env
+    environment:
+      SMTP_HOST: 0.0.0.0
+      SMTP_PORT: "25"
+      STORAGE_ROOT: /data
+      DATABASE_PATH: /data/app.db
+    volumes:
+      - ./storage:/data
+    depends_on:
+      http:
+        condition: service_healthy

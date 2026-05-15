@@ -23,19 +23,19 @@ unsigned char* u8_tolower(const unsigned char* s,
 // Small hand-declared ICU ABI surface for the legacy IDNA2003 API.
 using UChar = char16_t;
 using UErrorCode = std::int32_t;
-UChar* u_strFromUTF8_72(UChar* dest,
+UChar* u_strFromUTF8_76(UChar* dest,
                         std::int32_t destCapacity,
                         std::int32_t* pDestLength,
                         const char* src,
                         std::int32_t srcLength,
                         UErrorCode* pErrorCode);
-char* u_strToUTF8_72(char* dest,
+char* u_strToUTF8_76(char* dest,
                      std::int32_t destCapacity,
                      std::int32_t* pDestLength,
                      const UChar* src,
                      std::int32_t srcLength,
                      UErrorCode* pErrorCode);
-std::int32_t uidna_IDNToASCII_72(const UChar* src,
+std::int32_t uidna_IDNToASCII_76(const UChar* src,
                                  std::int32_t srcLength,
                                  UChar* dest,
                                  std::int32_t destCapacity,
@@ -212,7 +212,7 @@ std::vector<UChar> utf8_to_uchars(std::string_view value) {
         std::vector<UChar> output(static_cast<std::size_t>(capacity));
         std::int32_t output_length = 0;
         UErrorCode status = kUZeroError;
-        (void)u_strFromUTF8_72(output.data(),
+        (void)u_strFromUTF8_76(output.data(),
                                capacity,
                                &output_length,
                                value.data(),
@@ -242,7 +242,7 @@ std::vector<UChar> idna_to_ascii_uchars(const std::vector<UChar>& input) {
     for (;;) {
         std::vector<UChar> output(static_cast<std::size_t>(capacity));
         UErrorCode status = kUZeroError;
-        const std::int32_t output_length = uidna_IDNToASCII_72(input.data(),
+        const std::int32_t output_length = uidna_IDNToASCII_76(input.data(),
                                                               src_length,
                                                               output.data(),
                                                               capacity,
@@ -269,7 +269,7 @@ std::string uchars_to_utf8(const std::vector<UChar>& input) {
         std::string output(static_cast<std::size_t>(capacity), '\0');
         std::int32_t output_length = 0;
         UErrorCode status = kUZeroError;
-        (void)u_strToUTF8_72(output.data(),
+        (void)u_strToUTF8_76(output.data(),
                              capacity,
                              &output_length,
                              input.data(),

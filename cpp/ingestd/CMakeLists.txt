@@ -8,7 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(SQLite3 REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_library(UNISTRING_LIBRARY NAMES unistring libunistring.so.2 REQUIRED)
-find_library(ICUUC_LIBRARY NAMES icuuc libicuuc.so.72 REQUIRED)
+find_library(ICUUC_LIBRARY NAMES icuuc libicuuc.so.76 REQUIRED)
 
 set(INGESTD_LIB_SOURCES
     src/batch_writer.cpp

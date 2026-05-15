@@ -1,0 +1,12 @@
+.git
+.github
+.venv
+.rapid-inbox-run
+storage
+cpp/ingestd/build
+**/__pycache__
+*.pyc
+rapid_inbox.egg-info
+tests
+tools
+.env
