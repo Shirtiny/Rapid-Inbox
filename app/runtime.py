@@ -26,6 +26,7 @@ from app.services.audit import AuditService
 from app.services.domains import DomainService
 from app.services.mailboxes import MailboxService
 from app.services.messages import MessageService
+from app.services.retention_rules import RetentionRuleService
 from app.services.settings import SettingsService
 from app.smtp.live_state import LiveState
 from app.smtp.matcher import DomainMatcher, DomainRule
@@ -51,6 +52,7 @@ class RapidInboxRuntime:
         self.messages = MessageService(self)
         self.audit = AuditService(self)
         self.system_settings = SettingsService(self)
+        self.retention_rules = RetentionRuleService(self)
         self.parser = MessageParser(self.storage)
         self.parse_queue = ParseQueue(self._parse_message, worker_count=settings.parse_worker_count)
         self._mail_store_lock = asyncio.Lock()
@@ -79,6 +81,7 @@ class RapidInboxRuntime:
         await self.parse_queue.start()
         await self.recovery.run()
         self.domains.reload()
+        self.retention_rules.load_rules()
         self._retention_cleanup_task = asyncio.create_task(self._message_retention_loop())
         self._pending_parse_scan_task = asyncio.create_task(self._pending_parse_scan_loop())
 
@@ -177,7 +180,9 @@ class RapidInboxRuntime:
                 )
 
             result = await self.writer.execute(
-                lambda connection: self._delete_expired_runtime_records(connection, cutoff, metric_cutoff)
+                lambda connection: self._delete_expired_runtime_records(
+                    connection, cutoff, metric_cutoff, expired_message_ids
+                )
             )
             storage_paths = result.pop("storage_paths")
             deleted_files = await asyncio.to_thread(self._delete_storage_files, storage_paths)
@@ -253,7 +258,9 @@ class RapidInboxRuntime:
                 """,
                 (cutoff,),
             ).fetchall()
-        return [str(row["id"]) for row in rows]
+        candidate_ids = [str(row["id"]) for row in rows]
+        retained = self.retention_rules.get_retained_message_ids(candidate_ids)
+        return [mid for mid in candidate_ids if mid not in retained]
 
     def _expired_smtp_session_ids(self, cutoff: str) -> list[str]:
         where_clause, params = self._smtp_session_expiration_filter(cutoff)
@@ -315,69 +322,51 @@ class RapidInboxRuntime:
         connection: sqlite3.Connection,
         cutoff: str,
         metric_cutoff: str,
+        message_ids: list[str],
     ) -> dict[str, Any]:
-        result = self._delete_messages_received_at_or_before(connection, cutoff)
+        result = self._delete_messages_by_ids(connection, message_ids)
         result["mailboxes"] += self._delete_empty_mailboxes_at_or_before(connection, cutoff)
         result["smtp_sessions"] = self._delete_smtp_sessions_at_or_before(connection, cutoff)
         result["metric_buckets"] = self._delete_metric_buckets_before(connection, metric_cutoff)
         return result
 
-    def _delete_messages_received_at_or_before(
+    def _delete_messages_by_ids(
         self,
         connection: sqlite3.Connection,
-        cutoff: str,
+        message_ids: list[str],
     ) -> dict[str, Any]:
+        if not message_ids:
+            return {**self._empty_retention_result(), "storage_paths": []}
+
+        placeholders = ",".join("?" for _ in message_ids)
         message_rows = connection.execute(
-            """
-            SELECT
-                id,
-                raw_path,
-                raw_size_bytes,
-                received_at,
-                text_body_path,
-                html_body_path
+            f"""
+            SELECT id, raw_path, raw_size_bytes, received_at, text_body_path, html_body_path
             FROM messages
-            WHERE received_at <= ?
+            WHERE id IN ({placeholders})
             ORDER BY received_at ASC, id ASC
             """,
-            (cutoff,),
+            message_ids,
         ).fetchall()
         if not message_rows:
             return {**self._empty_retention_result(), "storage_paths": []}
 
         delivery_count = int(
             connection.execute(
-                """
-                SELECT COUNT(*) AS count
-                FROM message_deliveries AS d
-                JOIN messages AS m ON m.id = d.message_id
-                WHERE m.received_at <= ?
-                """,
-                (cutoff,),
+                f"SELECT COUNT(*) AS count FROM message_deliveries WHERE message_id IN ({placeholders})",
+                message_ids,
             ).fetchone()["count"]
         )
         mailbox_ids = [
             int(row["mailbox_id"])
             for row in connection.execute(
-                """
-                SELECT DISTINCT d.mailbox_id
-                FROM message_deliveries AS d
-                JOIN messages AS m ON m.id = d.message_id
-                WHERE m.received_at <= ?
-                ORDER BY d.mailbox_id ASC
-                """,
-                (cutoff,),
+                f"SELECT DISTINCT mailbox_id FROM message_deliveries WHERE message_id IN ({placeholders}) ORDER BY mailbox_id ASC",
+                message_ids,
             ).fetchall()
         ]
         attachment_rows = connection.execute(
-            """
-            SELECT a.storage_path
-            FROM attachments AS a
-            JOIN messages AS m ON m.id = a.message_id
-            WHERE m.received_at <= ?
-            ORDER BY a.message_id ASC, a.part_index ASC
-            """,
-            (cutoff,),
+            f"SELECT storage_path FROM attachments WHERE message_id IN ({placeholders}) ORDER BY message_id ASC, part_index ASC",
+            message_ids,
         ).fetchall()
 
         storage_paths: list[str] = []
@@ -396,7 +385,7 @@ class RapidInboxRuntime:
                     storage_paths.append(str(path_value))
         storage_paths.extend(str(row["storage_path"]) for row in attachment_rows)
 
-        connection.execute("DELETE FROM messages WHERE received_at <= ?", (cutoff,))
+        connection.execute(f"DELETE FROM messages WHERE id IN ({placeholders})", message_ids)
         deleted_mailboxes = 0
         for mailbox_id in mailbox_ids:
             if self._refresh_mailbox_summary_after_message_delete(connection, mailbox_id):

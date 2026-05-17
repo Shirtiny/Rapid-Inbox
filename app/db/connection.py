@@ -73,6 +73,19 @@ def _apply_lightweight_migrations(connection: sqlite3.Connection) -> None:
         )
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS retention_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_type TEXT NOT NULL CHECK (rule_type IN ('mailbox', 'domain', 'regex')),
+            pattern TEXT NOT NULL,
+            description TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
     _backfill_mail_metric_buckets(connection)
 
 

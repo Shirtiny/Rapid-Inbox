@@ -1,0 +1,282 @@
+{% extends "admin/base.html" %}
+
+{% block head %}
+<style>
+  .rule-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+  .rule-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 18px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-faint);
+    border-radius: 10px;
+  }
+  .rule-row__primary { min-width: 0; }
+  .rule-row__pattern {
+    font-family: var(--font-mono);
+    font-size: 0.88rem;
+    font-weight: 500;
+    color: var(--text);
+    word-break: break-all;
+  }
+  .rule-row__meta {
+    display: flex; gap: 10px; align-items: center;
+    margin-top: 3px; font-size: 0.82rem; color: var(--text-muted);
+  }
+  .rule-row__actions { display: flex; gap: 6px; align-items: center; }
+
+  .pill--mailbox { background: var(--info-soft); color: var(--info-strong); }
+  .pill--domain { background: var(--success-soft); color: var(--success-strong); }
+  .pill--regex { background: var(--warning-soft); color: var(--warning-strong); }
+
+  .msg-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+  .msg-row {
+    display: grid;
+    grid-template-columns: 28px 1fr auto;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-faint);
+    border-radius: 8px;
+    font-size: 0.86rem;
+  }
+  .msg-row:hover { border-color: var(--border); }
+  .msg-row__body { min-width: 0; }
+  .msg-row__subject { font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .msg-row__meta {
+    display: flex; gap: 10px; align-items: center;
+    margin-top: 2px; font-size: 0.8rem; color: var(--text-muted);
+  }
+  .msg-row__meta span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .msg-row__rule { font-size: 0.8rem; white-space: nowrap; }
+
+  .bulk-bar {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 12px; font-size: 0.84rem; color: var(--text-muted);
+  }
+
+  .drawer-backdrop {
+    position: fixed; inset: 0; z-index: 9999;
+    display: none; background: rgba(31, 30, 29, 0.42); backdrop-filter: blur(4px);
+  }
+  .drawer-backdrop.is-open { display: block; }
+  .drawer {
+    position: fixed; top: 0; right: 0; bottom: 0;
+    width: min(560px, 100vw); z-index: 10000;
+    display: none; flex-direction: column;
+    background: var(--bg-elevated);
+    box-shadow: -16px 0 36px rgba(31, 30, 29, 0.18);
+    transform: translateX(100%); transition: transform 0.22s ease;
+  }
+  .drawer.is-open { display: flex; transform: translateX(0); }
+  .drawer__head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 18px 22px;
+    border-bottom: 1px solid var(--border-faint); flex-shrink: 0;
+  }
+  .drawer__head h2 { margin: 0; font-size: 1.15rem; font-family: var(--font-serif); }
+  .drawer__head p { margin: 4px 0 0; color: var(--text-muted); font-size: 0.84rem; }
+  .drawer__close {
+    display: inline-flex; width: 32px; height: 32px;
+    align-items: center; justify-content: center;
+    border-radius: 8px; border: 1px solid transparent;
+    background: transparent; color: var(--text-muted); cursor: pointer; flex-shrink: 0;
+  }
+  .drawer__close:hover { background: var(--bg-subtle); color: var(--text); }
+  .drawer__body { flex: 1; overflow-y: auto; padding: 20px 22px 16px; }
+  .drawer__form { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+  .drawer__actions {
+    padding: 14px 22px; border-top: 1px solid var(--border-faint);
+    background: var(--bg-elevated); flex-shrink: 0;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<header class="page-header">
+  <div>
+    <p class="eyebrow">系统</p>
+    <h1>保留规则</h1>
+    <p class="page-header__lede">配置哪些邮件在自动清理时应被永久保留。</p>
+  </div>
+  <div class="page-header__actions">
+    <button type="button" class="button button--primary" data-drawer-open="create-rule">
+      <i data-lucide="plus"></i>新建规则
+    </button>
+  </div>
+</header>
+
+{% if notice %}
+  <div class="notice notice--{{ notice.type }}">
+    <i data-lucide="{% if notice.type == 'success' %}check-circle{% else %}alert-circle{% endif %}"></i>
+    <span>{{ notice.text }}</span>
+  </div>
+{% endif %}
+
+<section aria-labelledby="rule-list-heading">
+  <div class="row row--between" style="margin-bottom: 14px;">
+    <div>
+      <h2 id="rule-list-heading" style="margin: 0; font-size: 1.15rem;">规则清单</h2>
+      <p class="muted" style="margin: 2px 0 0; font-size: 0.86rem;">共 {{ rules | length }} 条规则</p>
+    </div>
+  </div>
+
+  {% if rules %}
+    <ul class="rule-list">
+      {% for rule in rules %}
+        <li class="rule-row">
+          {% if rule.rule_type == 'mailbox' %}
+            <span class="pill pill--mailbox">邮箱</span>
+          {% elif rule.rule_type == 'domain' %}
+            <span class="pill pill--domain">域名</span>
+          {% else %}
+            <span class="pill pill--regex">正则</span>
+          {% endif %}
+          <div class="rule-row__primary">
+            <p class="rule-row__pattern">{{ rule.pattern }}</p>
+            <div class="rule-row__meta">
+              {% if rule.description %}<span>{{ rule.description }}</span>{% endif %}
+              <span>{{ rule.created_at[:10] }}</span>
+            </div>
+          </div>
+          <div class="rule-row__actions">
+            <form method="post" action="/admin/retention/{{ rule.id }}/toggle" style="margin:0">
+              {% if rule.is_active %}
+                <button type="submit" class="button button--ghost button--sm" title="点击禁用">
+                  <i data-lucide="toggle-right" style="color:var(--success-strong)"></i>
+                </button>
+              {% else %}
+                <button type="submit" class="button button--ghost button--sm" title="点击启用">
+                  <i data-lucide="toggle-left" style="color:var(--text-muted)"></i>
+                </button>
+              {% endif %}
+            </form>
+            <form method="post" action="/admin/retention/{{ rule.id }}/delete" style="margin:0"
+                  onsubmit="return confirm('确定删除此规则？')">
+              <button type="submit" class="button button--ghost button--sm">
+                <i data-lucide="trash-2" style="color:var(--danger-strong)"></i>
+              </button>
+            </form>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <div class="empty-state">
+      <span class="empty-state__icon"><i data-lucide="shield-check"></i></span>
+      <h3>还没有创建任何保留规则</h3>
+      <p>点击右上角「新建规则」，配置需要永久保留的邮件条件。</p>
+    </div>
+  {% endif %}
+</section>
+
+<div class="drawer-backdrop" data-drawer-backdrop="create-rule" hidden></div>
+<aside
+  class="drawer"
+  data-drawer="create-rule"
+  role="dialog"
+  aria-labelledby="create-rule-title"
+  aria-modal="true"
+  hidden
+>
+  <header class="drawer__head">
+    <div>
+      <h2 id="create-rule-title">新建保留规则</h2>
+      <p>匹配的邮件将在自动清理时被跳过，永久保留。</p>
+    </div>
+    <button class="drawer__close" type="button" data-drawer-close aria-label="关闭">
+      <i data-lucide="x"></i>
+    </button>
+  </header>
+
+  <form method="post" action="/admin/retention" class="drawer__form">
+    <div class="drawer__body">
+      <label>
+        <span>规则类型</span>
+        <select name="rule_type" required>
+          <option value="mailbox">邮箱地址</option>
+          <option value="domain">域名</option>
+          <option value="regex">正则表达式</option>
+        </select>
+      </label>
+      <label>
+        <span>匹配模式</span>
+        <input type="text" name="pattern" required placeholder="例如 info@example.com 或 example.com 或 验证码|code">
+        <small style="color:var(--text-muted);font-size:0.78rem;margin-top:4px;display:block">正则模式匹配邮件标题、发件人和收件人地址</small>
+      </label>
+      <label>
+        <span>描述（可选）</span>
+        <input type="text" name="description" placeholder="备注此规则的用途">
+      </label>
+    </div>
+    <div class="drawer__actions">
+      <button type="submit" class="button button--primary button--block">创建规则</button>
+    </div>
+  </form>
+</aside>
+
+<script>
+  (() => {
+    const openers = document.querySelectorAll('[data-drawer-open]');
+    const drawers = document.querySelectorAll('[data-drawer]');
+    const closers = document.querySelectorAll('[data-drawer-close]');
+    const backdrops = document.querySelectorAll('[data-drawer-backdrop]');
+
+    const drawerByName = new Map();
+    drawers.forEach((el) => drawerByName.set(el.getAttribute('data-drawer'), el));
+    const backdropByName = new Map();
+    backdrops.forEach((el) => backdropByName.set(el.getAttribute('data-drawer-backdrop'), el));
+
+    const openDrawer = (name) => {
+      const drawer = drawerByName.get(name);
+      const backdrop = backdropByName.get(name);
+      if (!drawer) return;
+      drawer.hidden = false;
+      if (backdrop) backdrop.hidden = false;
+      requestAnimationFrame(() => {
+        drawer.classList.add('is-open');
+        if (backdrop) backdrop.classList.add('is-open');
+      });
+      document.body.style.overflow = 'hidden';
+    };
+
+    const closeDrawer = (drawer) => {
+      const name = drawer.getAttribute('data-drawer');
+      const backdrop = backdropByName.get(name);
+      drawer.classList.remove('is-open');
+      if (backdrop) backdrop.classList.remove('is-open');
+      setTimeout(() => {
+        drawer.hidden = true;
+        if (backdrop) backdrop.hidden = true;
+      }, 220);
+      document.body.style.overflow = '';
+    };
+
+    const closeAll = () => drawers.forEach((d) => { if (d.classList.contains('is-open')) closeDrawer(d); });
+
+    openers.forEach((btn) => btn.addEventListener('click', () => openDrawer(btn.getAttribute('data-drawer-open'))));
+    closers.forEach((btn) => btn.addEventListener('click', () => {
+      const drawer = btn.closest('[data-drawer]');
+      if (drawer) closeDrawer(drawer);
+    }));
+    backdrops.forEach((bg) => bg.addEventListener('click', () => {
+      const name = bg.getAttribute('data-drawer-backdrop');
+      const drawer = drawerByName.get(name);
+      if (drawer) closeDrawer(drawer);
+    }));
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAll(); });
+
+    drawers.forEach((d) => { if (d.hasAttribute('data-drawer-autoopen')) openDrawer(d.getAttribute('data-drawer')); });
+  })();
+
+  const selectAll = document.getElementById('select-all');
+  if (selectAll) {
+    selectAll.addEventListener('change', function() {
+      document.querySelectorAll('.msg-check').forEach(cb => cb.checked = this.checked);
+    });
+  }
+</script>
+{% endblock %}

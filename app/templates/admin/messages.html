@@ -26,6 +26,21 @@
     color: var(--success-strong);
     font-size: 0.82rem;
   }
+  .bulk-bar {
+    display: grid;
+    grid-template-columns: 24px auto;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 0;
+    font-size: 0.84rem; color: var(--text-muted);
+    border-bottom: 1px solid var(--border-faint);
+  }
+  .bulk-bar__actions { display: flex; align-items: center; gap: 10px; }
+  .inbox-row { grid-template-columns: 24px 44px minmax(0, 1fr) auto !important; }
+  .inbox-row__check { accent-color: var(--accent); }
+  @media (max-width: 760px) {
+    .inbox-row { grid-template-columns: 24px 36px minmax(0, 1fr) !important; }
+  }
 </style>
 {% endblock %}
 
@@ -64,9 +79,24 @@
 </form>
 
 {% if messages %}
+  <form method="post" action="/admin/messages/bulk-delete" id="bulk-delete-form">
+  <div class="bulk-bar">
+    <input type="checkbox" id="select-all" style="accent-color:var(--accent)">
+    <div class="bulk-bar__actions">
+      <label for="select-all">全选</label>
+      <button type="submit" class="button button--danger button--sm"
+              onclick="return confirm('确定删除选中的邮件？此操作不可恢复。')">
+        <i data-lucide="trash-2"></i>批量删除
+      </button>
+      {% if deleted_count %}
+        <span style="color:var(--success-strong)">已删除 {{ deleted_count }} 封</span>
+      {% endif %}
+    </div>
+  </div>
   <ul class="inbox">
     {% for message in messages %}
       <li class="inbox-row">
+        <input type="checkbox" name="message_ids" value="{{ message.id }}" class="inbox-row__check msg-check">
         <span class="inbox-row__avatar">
           {% if message.from_addr %}
             {{ (message.from_addr | string)[0] | upper }}
@@ -106,6 +136,7 @@
       </li>
     {% endfor %}
   </ul>
+  </form>
 
   <div class="pagination-panel">
     <span class="pagination-summary">
@@ -120,4 +151,13 @@
     <p>当系统接收到新的 SMTP 邮件时，这里会自动出现。</p>
   </div>
 {% endif %}
+
+<script>
+  const selectAll = document.getElementById('select-all');
+  if (selectAll) {
+    selectAll.addEventListener('change', function() {
+      document.querySelectorAll('.msg-check').forEach(cb => cb.checked = this.checked);
+    });
+  }
+</script>
 {% endblock %}

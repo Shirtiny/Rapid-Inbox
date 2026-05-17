@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 import shutil
@@ -1447,6 +1448,7 @@ async def messages_page(
             "messages": messages,
             "mailboxes": request.app.state.runtime.mailboxes.list_mailboxes(limit=1000)["items"],
             "filters": filters,
+            "deleted_count": request.query_params.get("deleted", ""),
             "pagination": build_pagination_context(
                 path="/admin/messages",
                 limit=limit,
@@ -1542,6 +1544,50 @@ async def delete_message_deliveries_from_form(message_id: str, request: Request)
         details=result,
     )
     return RedirectResponse(f"/admin/messages/{message_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/admin/messages/{message_id}/delete")
+async def delete_message_from_form(message_id: str, request: Request) -> Response:
+    admin_or_response = await _require_admin(request)
+    if isinstance(admin_or_response, Response):
+        return admin_or_response
+
+    runtime = request.app.state.runtime
+    async with runtime._mail_store_lock:
+        result = await runtime.writer.execute(
+            lambda connection: runtime._delete_messages_by_ids(connection, [message_id])
+        )
+        storage_paths = result.pop("storage_paths", [])
+        await asyncio.to_thread(runtime._delete_storage_files, storage_paths)
+
+    await _log_admin_audit(request, admin_or_response, "messages.delete", "message", message_id, "success")
+    return RedirectResponse("/admin/messages?deleted=1", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/admin/messages/bulk-delete")
+async def bulk_delete_messages_from_form(request: Request) -> Response:
+    admin_or_response = await _require_admin(request)
+    if isinstance(admin_or_response, Response):
+        return admin_or_response
+
+    form = _parse_form_body_lists(await request.body())
+    message_ids = form.get("message_ids", [])
+    if not message_ids:
+        return RedirectResponse("/admin/messages", status_code=status.HTTP_303_SEE_OTHER)
+
+    runtime = request.app.state.runtime
+    async with runtime._mail_store_lock:
+        result = await runtime.writer.execute(
+            lambda connection: runtime._delete_messages_by_ids(connection, message_ids)
+        )
+        storage_paths = result.pop("storage_paths", [])
+        await asyncio.to_thread(runtime._delete_storage_files, storage_paths)
+
+    await _log_admin_audit(
+        request, admin_or_response, "messages.bulk_delete", "messages", None, "success",
+        details={"count": result["messages"], "message_ids": message_ids[:20]},
+    )
+    return RedirectResponse(f"/admin/messages?deleted={result['messages']}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.get("/admin/api-keys", response_class=HTMLResponse)
@@ -2193,5 +2239,149 @@ async def clear_mail_store(request: Request) -> Response:
             f"&database_size_after_bytes={result.get('database_size_after_bytes', 0)}"
             f"&database_vacuumed={result.get('database_vacuumed', 0)}"
         ),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+# ─── Retention Rules ───────────────────────────────────────────────────────────
+
+
+@router.get("/admin/retention", response_class=HTMLResponse)
+async def retention_rules_page(request: Request) -> Response:
+    admin_or_response = await _require_admin(request)
+    if isinstance(admin_or_response, Response):
+        return admin_or_response
+
+    runtime = request.app.state.runtime
+    rules = runtime.retention_rules.list_rules()
+
+    search_query = request.query_params.get("q", "").strip()
+    retained_messages = runtime.retention_rules.list_retained_messages(query=search_query) if search_query else []
+
+    notice = None
+    if request.query_params.get("created"):
+        notice = {"type": "success", "text": "保留规则已创建"}
+    elif request.query_params.get("deleted"):
+        notice = {"type": "success", "text": "规则已删除"}
+    elif request.query_params.get("toggled"):
+        notice = {"type": "success", "text": "规则状态已更新"}
+    elif request.query_params.get("messages_deleted"):
+        count = request.query_params.get("messages_deleted", "0")
+        notice = {"type": "success", "text": f"已删除 {count} 封邮件"}
+
+    error = request.query_params.get("error")
+    if error:
+        notice = {"type": "warning", "text": error}
+
+    return _render(request, "admin/retention.html", {
+        "page_title": "保留规则",
+        "admin": admin_or_response,
+        "rules": rules,
+        "retained_messages": retained_messages,
+        "search_query": search_query,
+        "notice": notice,
+    })
+
+
+@router.post("/admin/retention")
+async def create_retention_rule(request: Request) -> Response:
+    admin_or_response = await _require_admin(request)
+    if isinstance(admin_or_response, Response):
+        return admin_or_response
+
+    form = _parse_form_body(await request.body())
+    rule_type = form.get("rule_type", "").strip()
+    pattern = form.get("pattern", "").strip()
+    description = form.get("description", "").strip()
+
+    runtime = request.app.state.runtime
+    try:
+        rule = await runtime.retention_rules.create_rule(rule_type, pattern, description)
+    except ValueError as exc:
+        return RedirectResponse(
+            f"/admin/retention?error={str(exc)}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    admin_ref = str(admin_or_response.get("username") or admin_or_response.get("id") or "admin")
+    await runtime.audit.log(
+        "admin", admin_ref, "retention_rules.create", "retention_rule",
+        str(rule["id"]), "success",
+        ip=_client_ip(request), user_agent=request.headers.get("user-agent"),
+    )
+    return RedirectResponse("/admin/retention?created=1", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/admin/retention/{rule_id}/toggle")
+async def toggle_retention_rule(rule_id: int, request: Request) -> Response:
+    admin_or_response = await _require_admin(request)
+    if isinstance(admin_or_response, Response):
+        return admin_or_response
+
+    runtime = request.app.state.runtime
+    try:
+        await runtime.retention_rules.toggle_rule(rule_id)
+    except ValueError as exc:
+        return RedirectResponse(
+            f"/admin/retention?error={str(exc)}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    admin_ref = str(admin_or_response.get("username") or admin_or_response.get("id") or "admin")
+    await runtime.audit.log(
+        "admin", admin_ref, "retention_rules.toggle", "retention_rule",
+        str(rule_id), "success",
+        ip=_client_ip(request), user_agent=request.headers.get("user-agent"),
+    )
+    return RedirectResponse("/admin/retention?toggled=1", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/admin/retention/{rule_id}/delete")
+async def delete_retention_rule(rule_id: int, request: Request) -> Response:
+    admin_or_response = await _require_admin(request)
+    if isinstance(admin_or_response, Response):
+        return admin_or_response
+
+    runtime = request.app.state.runtime
+    await runtime.retention_rules.delete_rule(rule_id)
+
+    admin_ref = str(admin_or_response.get("username") or admin_or_response.get("id") or "admin")
+    await runtime.audit.log(
+        "admin", admin_ref, "retention_rules.delete", "retention_rule",
+        str(rule_id), "success",
+        ip=_client_ip(request), user_agent=request.headers.get("user-agent"),
+    )
+    return RedirectResponse("/admin/retention?deleted=1", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/admin/retention/delete-messages")
+async def delete_retained_messages(request: Request) -> Response:
+    admin_or_response = await _require_admin(request)
+    if isinstance(admin_or_response, Response):
+        return admin_or_response
+
+    form = _parse_form_body_lists(await request.body())
+    message_ids = form.get("message_ids", [])
+    if not message_ids:
+        return RedirectResponse("/admin/retention?error=未选择邮件", status_code=status.HTTP_303_SEE_OTHER)
+
+    runtime = request.app.state.runtime
+
+    async with runtime._mail_store_lock:
+        result = await runtime.writer.execute(
+            lambda connection: runtime._delete_messages_by_ids(connection, message_ids)
+        )
+        storage_paths = result.pop("storage_paths", [])
+        await asyncio.to_thread(runtime._delete_storage_files, storage_paths)
+
+    admin_ref = str(admin_or_response.get("username") or admin_or_response.get("id") or "admin")
+    await runtime.audit.log(
+        "admin", admin_ref, "retention_rules.delete_messages", "messages",
+        None, "success",
+        ip=_client_ip(request), user_agent=request.headers.get("user-agent"),
+        details={"count": result["messages"], "message_ids": message_ids[:20]},
+    )
+    return RedirectResponse(
+        f"/admin/retention?messages_deleted={result['messages']}",
         status_code=status.HTTP_303_SEE_OTHER,
     )
