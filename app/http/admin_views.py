@@ -1417,11 +1417,18 @@ async def messages_page(
     offset: int = Query(default=0, ge=0, le=1_000_000),
     q: str | None = Query(default=None),
     parse_status: str | None = Query(default=None),
-    mailbox_id: int | None = Query(default=None),
+    mailbox_id: str | None = Query(default=None),
 ) -> Response:
     admin_or_response = await _require_admin(request)
     if isinstance(admin_or_response, Response):
         return admin_or_response
+
+    resolved_mailbox_id: int | None = None
+    if mailbox_id:
+        try:
+            resolved_mailbox_id = int(mailbox_id)
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="mailbox_id must be a valid integer")
 
     try:
         result = request.app.state.runtime.messages.list_messages(
@@ -1429,7 +1436,7 @@ async def messages_page(
             offset=offset,
             query=q,
             parse_status=parse_status,
-            mailbox_id=mailbox_id,
+            mailbox_id=resolved_mailbox_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
