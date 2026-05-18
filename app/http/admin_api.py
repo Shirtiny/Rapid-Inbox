@@ -520,17 +520,23 @@ async def list_messages(
     offset: int = Query(default=0, ge=0, le=1_000_000),
     q: str | None = Query(default=None),
     parse_status: str | None = Query(default=None),
-    mailbox_id: int | None = Query(default=None),
+    mailbox_id: str | None = Query(default=None),
 ) -> dict[str, Any]:
     require_admin_scope(admin, "messages.read")
     await _record_admin_key_usage(request, admin)
+    resolved_mailbox_id: int | None = None
+    if mailbox_id:
+        try:
+            resolved_mailbox_id = int(mailbox_id)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="mailbox_id must be a valid integer")
     try:
         return request.app.state.runtime.messages.list_messages(
             limit=limit,
             offset=offset,
             query=q,
             parse_status=parse_status,
-            mailbox_id=mailbox_id,
+            mailbox_id=resolved_mailbox_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
