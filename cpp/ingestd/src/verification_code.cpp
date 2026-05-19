@@ -559,6 +559,7 @@ bool is_stop_word(const std::string& value) {
         "token",   "secret", "minutes", "minute", "style",    "width",   "height",
         "table",   "title",  "class",   "message", "content", "report",  "server",
         "tracking", "order", "orders",  "shipment", "invoice", "receipt",
+        "woff2",   "woff",  "format",
     };
     return stop_words.contains(lower_ascii(value));
 }
