@@ -16,7 +16,7 @@ namespace {
 
 constexpr double kScoreThreshold = 5.0;
 constexpr double kTieMargin = 1.0;
-constexpr std::size_t kContextRadius = 48;
+constexpr std::size_t kContextRadius = 140;
 
 struct Candidate {
     std::string code;
@@ -187,6 +187,17 @@ const std::vector<std::string_view>& hints() {
         "confirm your sign in",             "your code is",
         "code is",         "code:",         "enter this code",
         "enter the code",  "use this code", "please use the code",
+        "code to verify",  "code to confirm", "code to continue",
+        "enter the following",
+        "code de v\xc3\xa9rification",
+        "c\xc3\xb3digo de verificaci\xc3\xb3n",
+        "codigo de verificacion",
+        "best\xc3\xa4tigungscode",
+        "codice di verifica",
+        "\xe8\xaa\x8d\xe8\xa8\xbc\xe3\x82\xb3\xe3\x83\xbc\xe3\x83\x89",
+        "\xe7\xa2\xba\xe8\xaa\x8d\xe3\x82\xb3\xe3\x83\xbc\xe3\x83\x89",
+        "\xec\x9d\xb8\xec\xa6\x9d \xec\xbd\x94\xeb\x93\x9c",
+        "\xec\x9d\xb8\xec\xa6\x9d\xec\xbd\x94\xeb\x93\x9c",
     };
     return values;
 }
